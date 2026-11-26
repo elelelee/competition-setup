@@ -1,6 +1,6 @@
 ---
 name: competition-setup
-description: Bootstrap a new AI/ML competition project in one pass — interview and lock the competition spec, create the pipeline and axis-based experiment document structure, and write the project rules file (CLAUDE.md) plus reference docs that govern the rest of the competition after this skill is done. Run this once at the start of a Kaggle, DACON, or similar leaderboard competition. This skill only does setup — it does not train models, tune hyperparameters, or debug CV-LB gaps. For modeling itself use ml-modeling or dl-modeling; for mid-competition decisions the generated CLAUDE.md and docs take over.
+description: Bootstrap a new AI/ML competition project in one pass — interview and lock the competition spec, create the pipeline documents and the branch-based experiment tree (development branches hold a few exps under a per-branch quota, each exp bundles the many runs that answer one question, and branches fork when the work needs a separate line), and write the project rules file (CLAUDE.md) plus reference docs that govern the rest of the competition after this skill is done. Run this once at the start of a Kaggle, DACON, or similar leaderboard competition. This skill only does setup — it does not train models, tune hyperparameters, or debug CV-LB gaps. For modeling itself use ml-modeling or dl-modeling; for mid-competition decisions the generated CLAUDE.md and docs take over.
 disable-model-invocation: true
 ---
 
@@ -54,10 +54,10 @@ disable-model-invocation: true
 
 ```bash
 mkdir -p data/raw data/processed src exp sub docs pipelines
-printf 'data/raw/\ndata/processed/\nexp/*/ckpt/\nexp/*/*.npy\nsub/\n__pycache__/\n*.pyc\n' > .gitignore
+printf 'data/raw/\ndata/processed/\nexp/**/ckpt/\nexp/**/*.npy\nexp/**/*.npz\nexp/**/*.log\nsub/\n__pycache__/\n*.pyc\n' > .gitignore
 ```
 
-`.gitignore`에서 대용량 산출물을 제외하되 `EDA.md`, `exp/*.md`, `pipelines/*.md`는 반드시 버전 관리에 포함시킨다. 이 문서들이 기록의 단일 원천이므로 유실되면 복구할 수 없다.
+실험 폴더는 줄기 아래로 중첩되므로(`exp/<줄기>/<exp>/<실험>/`) 패턴은 `exp/**/`로 쓴다. `.gitignore`에서 대용량 산출물을 제외하되 `EDA.md`, `exp/**/BRANCH.md`, `exp/TEMPLATE.md`, `pipelines/*.md`는 반드시 버전 관리에 포함시킨다. 이 문서들이 기록의 단일 원천이므로 유실되면 복구할 수 없다.
 
 기존 파일이 있는 프로젝트라면 덮어쓰지 말고 현재 구조를 먼저 보여준 뒤 무엇을 이동·생성할지 확인받는다.
 
@@ -85,9 +85,61 @@ def competition_metric(y_true, y_pred):
     raise NotImplementedError
 ```
 
+실험은 번호 없이 `exp/<줄기>/<exp>/<실험>/` 경로로 가리킨다. 코드와 config가 같은 방식으로 경로를 다루도록 해석기를 함께 만든다.
+
+```python
+# src/paths.py
+import re
+from pathlib import Path
+
+EXP = Path(__file__).resolve().parent.parent / 'exp'
+NAME = re.compile(r'[a-z0-9][a-z0-9-]*')        # 줄기·exp·실험 이름: 짧은 소문자와 하이픈
+TIMEWORD = re.compile(r'(^|-)(v\d+|new|old|tmp|final)(-|$)')   # 시점·순번 이름
+
+
+def run_dir(ref: str) -> Path:
+    """'<줄기>/.../<exp>/<실험>' 경로(exp/ 아래)를 실험 폴더로 바꾼다.
+
+    config와 코드는 실험을 이 경로로 가리킨다. 번호를 쓰지 않으므로 경로가 곧 이름이다.
+    """
+    path = EXP / ref.removeprefix('exp/').strip('/')
+    if not path.is_dir() or not (path.parent / 'EXP.md').exists():
+        raise FileNotFoundError(f'{ref}: 실험 폴더가 없다 (exp/<줄기>/<exp>/<실험>)')
+    return path
+
+
+def _check_name(name: str) -> None:
+    if not NAME.fullmatch(name) or TIMEWORD.search(name):
+        raise ValueError(f'{name}: 이름은 짧은 소문자·하이픈이고, 시점·순번(v2, new, old, final)을 쓰지 않는다')
+
+
+def new_exp_dir(branch: str, name: str) -> Path:
+    """줄기 아래에 새 exp 폴더를 만든다. branch는 exp/ 아래 경로('stack', 'stack/nested').
+    EXP.md 머리말(시작·구성·대조·조건)은 만든 쪽이 바로 쓴다 (CLAUDE.md `기록`)."""
+    _check_name(name)
+    root = EXP / branch
+    if not (root / 'BRANCH.md').exists():
+        raise FileNotFoundError(f'{branch}: 줄기 문서가 없다. 줄기를 먼저 연다 (CLAUDE.md `줄기 · exp · 실험`)')
+    path = root / name
+    path.mkdir()          # 이미 있으면 FileExistsError — 같은 이름이면 그 exp의 실험이 아닌지 먼저 본다
+    return path
+
+
+def new_run_dir(ref: str) -> Path:
+    """'<exp 경로>/<실험>' 실험 폴더를 그 exp 안에 만든다."""
+    exp_path, _, run = ref.removeprefix('exp/').strip('/').rpartition('/')
+    _check_name(run)
+    root = EXP / exp_path
+    if not (root / 'EXP.md').exists():
+        raise FileNotFoundError(f'{exp_path}: EXP.md가 없다. exp 머리말을 먼저 쓴다')
+    path = root / run
+    path.mkdir()          # 이미 있으면 FileExistsError — 같은 이름을 다시 쓰지 않는다
+    return path
+```
+
 ---
 
-## 4단계 — 파이프라인 문서와 축 파일 생성
+## 4단계 — 파이프라인 문서와 줄기 생성
 
 ### 파이프라인
 
@@ -111,9 +163,55 @@ cp <skill_dir>/assets/pipeline.template.md pipelines/01-<이름>.md
 
 `pipelines/`의 `##` 다섯 개는 스키마이므로 데이터 유형과 무관하게 그대로 유지한다. `EDA.md`와 달리 조정 대상이 아니다.
 
-### 축 파일
+### 줄기 · exp · 실험
 
-`exp/`의 파일은 파이프라인이 아니라 **실험 축**으로 나눈다. 축은 무엇을 바꿨는지의 종류다. 축 파일은 파이프라인을 가로지르므로 전역으로 하나씩 만든다.
+실험 기록과 산출물은 파이프라인 아래에서 모델 구조를 따라 나뉜다. 규칙 전체는 `CLAUDE.md` `줄기 · exp · 실험`과 `정원과 보관` 절에 있다. 아래 설명은 예시이고, 무엇을 줄기·exp·실험으로 나눌지는 사용자가 명시하면 그대로, 아니면 대회 중에 판단한다.
+
+| 단위 | 위치 | 무엇인가 (예) |
+|---|---|---|
+| 줄기 | `exp/<줄기>/BRANCH.md` | 대략적인 모델 구조. 예: 3단계 스택, 단일 GBDT, CNN 파인튜닝. `구조` 절에 그 구조를, `상태` 절에 머리·대조·진행중을 둔다. 갈라지는 이유가 생기면 하위 디렉토리가 하위 줄기가 된다 |
+| exp | `exp/<줄기>/<exp>/EXP.md` | 그 구조를 구체적으로 어떻게 채울지. 예: 어떤 모델을 넣고(스택이면 1단계 멤버), 어떤 피처를 쓰는지. 폴더 이름이 무엇을 하는지 말한다 |
+| 실험 | `exp/<줄기>/<exp>/<실험>/` | 그 exp 안에서 돌린 것. 예: 멤버 학습, 멤버·피처 넣고 빼기, 메타 교체, 후처리·refit, 진단 |
+
+이렇게 나누는 이유는 실험마다 번호를 주고 폴더를 만들면 폴더가 수백 개로 불어나기 때문이다. 단조 증가 번호는 "새 번호 = 새 실험"이라 하나 더 만드는 비용이 없다. 그러면 지금 무엇이 살아 있는지, 같은 구성에서 무엇을 시도했는지가 보이지 않는다. 번호 대신 무엇을 하는지 말하는 이름을 쓰면, 만들기 전에 "이미 있는 것의 일부인가"를 먼저 보게 된다. 줄기마다 **exp 정원**(머리 1·대조 1·진행중 최대 4)을 두면 판정이 밀리지 않는다. 정원은 남길 수 있는 것의 상한이 아니다. 나중에 다시 볼 이유가 있는 exp는 `보관:`으로, 줄기는 `보존 — <이유>`로 남긴다.
+
+기록을 실험 축(무엇을 바꿨는지)으로 나누지 않는 이유도 있다. 그렇게 하면 대회 후반에 결합·스태킹 실험이 한 축 파일에 몰려, 파일을 열어도 지금 살아 있는 것이 보이지 않는다. 축은 실험 항목의 `축` 필드로 남겨 검색에 쓴다(아래 `축 목록`).
+
+선택된 파이프라인마다 **최상위 줄기 하나**를 만든다. 이름은 그 줄기의 모델 구조를 가리킨다(`stack`, `gbdt-single`, `cnn-finetune`). 시점이나 순번(`v1`, `base`, `new`)을 이름에 쓰지 않는다. 이름을 제안하고 사용자가 확정하게 한다.
+
+```bash
+cp <skill_dir>/assets/experiment-log.template.md exp/TEMPLATE.md
+mkdir -p exp/<줄기>
+```
+
+`TEMPLATE.md`는 형식 참조용이므로 5단계에서 이 대회에 맞게 확정한 뒤 그대로 둔다. 각 줄기 문서는 **템플릿을 복사하지 않고 새로 쓴다.** `구조` 절에는 1단계에서 확인한 과제와 사용자와 고른 파이프라인으로 그 줄기의 모델 구조를 적는다. 다음 세션이 이 절만 읽고도 무엇을 어떤 순서로 결합하는 모델인지 알 수 있어야 한다.
+
+```markdown
+# gbdt-single
+
+GBDT 한 모델로 예측하는 구조. 규칙은 `CLAUDE.md`, 형식은 `exp/TEMPLATE.md`.
+
+## 구조
+
+원본 피처(필요하면 파생 피처)를 GBDT 하나에 넣어 확률을 낸다. 결합 단계는 없다. fold별 모델의 OOF로 검증하고, test는 전체 train으로 다시 학습한 모델로 예측한다.
+
+## 상태
+
+- 파이프라인: `01-gbdt`
+- 갈라진 곳: 없음
+- 상태: 작업
+- 머리: 없음
+- 대조: 없음
+- 진행중: 없음
+```
+
+규칙을 줄기 문서마다 재서술하지 않는다. 줄기가 늘어날 때마다 같은 설명이 깔리고, `CLAUDE.md`가 바뀌었을 때 전부 낡는다.
+
+세팅 시점에는 하위 줄기도 exp도 만들지 않는다. 줄기가 쪼개질 이유와 exp의 구성은 실험을 해 봐야 생긴다. 스택처럼 여러 모델을 결합하는 구조는 단일 모델 줄기에서 멤버가 모인 뒤에 줄기로 연다. `CLAUDE.md`에 적힌 갈라지는 이유(비교 조건 변화, 최종 제출에서의 다른 역할, 같은 머리에서 두 방향)는 예시이며, 그 밖의 이유로도 가를 수 있다.
+
+### 축 목록
+
+무엇을 바꿨는지의 종류(**축**)는 파일이 아니라 실험 항목의 `축` 필드로 남긴다. 줄기를 가로질러 "이 축은 이미 해봤는가"를 `grep -rn "축: feature" exp/ --include=EXP.md`로 찾는 데 쓴다. 축 문자열이 제각각이면 이 검색이 안 되므로, 쓸 수 있는 값을 `exp/TEMPLATE.md`의 `축 목록`에 고정한다.
 
 과제 유형에 맞게 축 목록을 제안하고 사용자가 확정하게 한다. 아래는 출발점이며 전부 쓸 필요도, 여기 없는 축을 못 쓸 이유도 없다:
 
@@ -122,27 +220,7 @@ cp <skill_dir>/assets/pipeline.template.md pipelines/01-<이름>.md
 - 이미지 추가: `augmentation`, `resolution`, `backbone`
 - 텍스트 추가: `tokenization`, `context-length`
 
-축을 나누는 기준은 개수가 아니라 **재조회 단위**다. "이 실험을 나중에 다시 찾을 때 어디를 열 것인가"로 나눈다. 두 실험이 같은 파일에서 비교될 필요가 있으면 같은 축이다.
-
-**개수 제한을 두지 않는다.** 세팅 시점에 떠오르는 축을 전부 만든다. 세팅 이후 축 추가는 사용자 승인이 필요하므로(`CLAUDE.md`의 `새 문서 파일은 묻고 만든다`), 여기서 좁게 잡으면 나중에 맞지 않는 축에 실험을 밀어넣게 된다. 엉뚱한 축에 들어간 실험은 파일을 열어도 안 보이므로, 축을 나눈 이점 자체가 사라진다.
-
-다만 **하나의 실험만 들어갈 것이 확실한 축은 만들지 않는다.** 예를 들어 시드 변동폭 측정처럼 한 번으로 끝나는 것은 가장 가까운 축에 넣는다.
-
-목록을 확정하기 전에 빠진 축이 없는지 사용자에게 확인받는다.
-
-```bash
-cp <skill_dir>/assets/experiment-log.template.md exp/TEMPLATE.md
-```
-
-`TEMPLATE.md`는 형식 참조용이므로 그대로 둔다. 각 축 파일은 **템플릿을 복사하지 않고 세 줄로 새로 만든다.**
-
-```markdown
-# feature 실험 기록
-
-입력 표현을 바꾼 실험. 규칙은 `CLAUDE.md`, 형식은 `exp/TEMPLATE.md`.
-```
-
-규칙을 축 파일마다 재서술하지 않는다. 축이 5개면 같은 설명이 5번 깔리고, `CLAUDE.md`가 바뀌었을 때 전부 낡는다.
+축을 나누는 기준은 **재조회 단위**다. "이 실험을 나중에 다시 찾을 때 무엇으로 검색할 것인가"로 나눈다. 축은 파일이 아니라 값이므로 늘리는 비용이 작다. 세팅 시점에 떠오르는 축을 넉넉히 넣는다. 목록을 확정하기 전에 빠진 축이 없는지 사용자에게 확인받는다.
 
 ## 5단계 — 문서 형식 구체화
 
@@ -155,8 +233,10 @@ cp <skill_dir>/assets/experiment-log.template.md exp/TEMPLATE.md
 | 분할 산출물 | 파일명과 형태 | `folds.npy` (5-fold 인덱스) / `split.json` (촬영 세션 단위 holdout) |
 | 변동폭 정의 | 무엇의 표준편차인가 | 5-fold 평균의 시드 간 표준편차 / 동일 설정 3-run의 표준편차 |
 | 판단 재료 | `결과` 필드에서 세 신호가 읽히는가 | fold별·run별 개별 점수를 남기는 형식인지 |
-| 실험 필드 | `exp/TEMPLATE.md`의 필드 이름과 각 필드에 적을 것. `파이프라인` 필드는 축 파일이 파이프라인을 가로지르므로 항상 포함한다 | `결과: CV ± std · fold별 [...]` / `결과: val mAP@0.5 ± std · run별 [...] · best epoch` |
-| 산출물 파일명 | `exp/<exp_id>/` 안의 파일 | `oof.npy`, `pred.npy` / `val_pred.npz`, `test_pred.npz` |
+| exp 구성 줄 | `exp/TEMPLATE.md` exp 머리말의 구성 줄(`모델`·`피처`·`결합`) 이름과 적을 것. 과제 유형에 맞게 바꾼다 | 테이블 스택: 1단계 멤버 / 피처 그룹 / 메타 · 이미지: 백본 / 해상도·증강 / TTA·앙상블 |
+| 실험 필드 | `exp/TEMPLATE.md`의 실험 항목 필드와 각 필드에 적을 것. 파이프라인은 줄기 머리말이, 구성·대조·조건은 exp 머리말이 가지므로 실험 항목에는 축·바꾼 것·결과·가설·해석만 둔다 | `결과: CV ± std · fold별 [...]` / `결과: val mAP@0.5 ± std · run별 [...] · best epoch` |
+| 축 목록 | `exp/TEMPLATE.md`의 `축 목록` — 실험 항목 `축` 필드에 쓸 값 | `feature`, `encoding`, `ensemble` / `augmentation`, `backbone` |
+| 산출물 파일명 | 실험 폴더 `exp/<줄기>/<exp>/<실험>/` 안의 파일. 정리 정책의 `DROP` 확장자와 맞춘다 | `oof.npy`, `pred.npy` / `val_pred.npz`, `test_pred.npz` |
 
 **변동폭은 세팅 시점에 확정하지 못할 수 있다.** 학습 1회에 얼마나 걸리는지 모르는 상태에서 "3-run 표준편차"로 정해두면, 나중에 1 run이 6시간이라는 걸 알게 됐을 때 측정 자체를 안 하게 된다. 측정하지 않으면 판정 신호 하나가 통째로 빠진다.
 
@@ -178,7 +258,9 @@ fold 간 표준편차를 대용으로 쓸 때의 한계도 함께 적는다 — 
 
 확정한 필드 형식을 `exp/TEMPLATE.md`에 반영하고, 예시도 이 대회의 지표와 검증 방식으로 바꿔 쓴다. 템플릿에 남아 있는 다른 유형의 예시는 지운다.
 
-축 파일에는 형식을 재서술하지 않는다. 모든 축이 `TEMPLATE.md`의 형식 하나를 따른다 — 축마다 형식이 다르면 축을 가로지르는 비교가 안 된다.
+줄기 문서에는 형식을 재서술하지 않는다. 모든 줄기가 `TEMPLATE.md`의 형식 하나를 따른다 — 줄기마다 형식이 다르면 줄기를 가로지르는 비교와 검색이 안 된다.
+
+정리 정책(`docs/cleanup-policy.md`)은 실험 디렉토리에서 `DROP` 확장자(기본 `.npy`·`.npz`·`.log`)와 `ckpt/`만 산출물로 지운다. 이 대회의 예측·모델 파일 확장자가 다르면 복사한 뒤 `DROP`을 맞춘다. `config.yaml`처럼 다시 만드는 데 필요한 파일이 `DROP`에 들지 않는지도 확인한다.
 
 `docs/`로 복사되는 참조 문서(`validation-design.md`, `cv-lb-diagnosis.md`)는 **전 유형 내용을 그대로** 복사한다. 대회 도중 접근이 바뀔 수 있고, 그때 필요한 내용이 문서에 있어야 한다.
 
@@ -206,14 +288,13 @@ cp <skill_dir>/assets/cleanup-policy.md     docs/
 | `{{EXTERNAL_DATA}}` | 외부 데이터·사전학습 허용 여부 |
 | `{{OPEN_ITEMS}}` | 1단계에서 확인하지 못한 항목 목록 |
 | `{{PIPELINE_1}}` | 4단계에서 만든 파이프라인 파일명 |
-| `{{AXIS_1}}` | 4단계에서 만든 축 파일명 |
 | `{{SPLIT_ARTIFACT}}` | 5단계에서 확정한 분할 산출물 파일명 |
 | `{{VARIATION}}` | 5단계에서 확정한 변동폭 정의 |
 | `{{ARTIFACT_FILES}}` | 5단계에서 확정한 산출물 파일명 목록 |
 
 치환하지 못한 자리표시자가 남아 있으면 안 된다. 값이 없으면 `미확인`으로 채운다.
 
-파이프라인이나 축을 2개 이상 만들었으면 `CLAUDE.md` 하단 mermaid 다이어그램의 `PIPE`와 `EXP` 노드에 나머지도 추가한다. 다이어그램은 Mermaid 문법으로 직접 작성하며, 외부 도구나 커넥터를 호출하지 않는다.
+파이프라인을 2개 이상 만들었으면 `CLAUDE.md` 하단 mermaid 다이어그램의 `PIPE` 노드에 나머지도 추가한다. 줄기는 대회 도중 자주 열고 닫으므로 다이어그램에 개별 줄기를 넣지 않는다(`EXP` 아래는 `<줄기>/` 일반형 그대로 둔다). 다이어그램은 Mermaid 문법으로 직접 작성하며, 외부 도구나 커넥터를 호출하지 않는다.
 
 `CLAUDE.md`는 Claude Code가 이후 세션마다 자동으로 읽는 파일이므로 이 스킬의 규칙을 지속시키는 유일한 경로다. 길게 만들지 않는다. 규칙과 포인터만 두고 상세는 `docs/`에 맡긴다.
 
