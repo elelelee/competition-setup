@@ -14,7 +14,7 @@
 
 | 대상 | 보존 | 삭제 |
 |---|---|---|
-| `EDA.md`, `pipelines/*.md`, `exp/TEMPLATE.md`, 줄기 문서 `exp/**/BRANCH.md`, exp 문서 `exp/**/EXP.md` | 전부 영구 보존. 닫은 줄기와 정원 밖 exp의 문서도 남긴다 | 삭제 금지 |
+| `EDA.md`, `exp/TEMPLATE.md`, 줄기 문서 `exp/**/BRANCH.md`, exp 문서 `exp/**/EXP.md` | 전부 영구 보존. 닫은 줄기와 정원 밖 exp의 문서도 남긴다 | 삭제 금지 |
 | 실험 폴더의 추적 파일(`config.yaml`, `metrics.json`, `curves.png` 등) | 전부 보존 | 삭제 금지 |
 | 실험 폴더의 산출물(예측·곡선 원자료·로그·`ckpt/`) | 산출물이 남는 exp와 실험 (아래 정의) | 그 밖 |
 | `ckpt/` | 산출물이 남는 실험의 best 1개 + last 1개 | 나머지 epoch 체크포인트 |
@@ -51,7 +51,8 @@ from pathlib import Path
 QUOTA = 4                                  # 작업 줄기의 진행중 exp 정원 (CLAUDE.md `정원과 보관` 절)
 DROP = ('.npy', '.npz', '.log')            # 정리 때 지우는 산출물 확장자. 이 대회의 모델 파일 확장자가 있으면 더한다
 NAME = re.compile(r'[a-z0-9][a-z0-9-]*')
-STATE_KEYS = ('파이프라인', '갈라진 곳', '상태', '머리', '대조', '진행중')
+STATE_KEYS = ('갈라진 곳', '상태', '머리', '대조', '진행중', '변동폭')
+SECTIONS = ['구조', '상태', '다음 후보']   # 줄기 문서의 `##` 고정 스키마
 exp = Path('exp')
 rel = lambda p: p.relative_to(exp).as_posix()
 problems, unlogged = [], []
@@ -100,7 +101,7 @@ def parse_exp(path):
             lb.add(cur)
     return title, head, items, lb
 
-# 줄기 문서: `## 구조`·`## 상태` 두 절, `상태` 절의 고정 줄
+# 줄기 문서: `## 구조`·`## 상태`·`## 다음 후보` 세 절, `상태` 절의 고정 줄
 branches = {}
 for b in sorted(bdirs):
     lines = (b / 'BRANCH.md').read_text(encoding='utf-8').splitlines()
@@ -121,8 +122,10 @@ for b in sorted(bdirs):
             else:
                 problems.append(f'{name}: {key} `{t}`의 {"exp" if want == "exp" else "실험"} 폴더가 없음')
     branches[b] = br
-    if [l[3:].strip() for l in lines if l.startswith('## ')] != ['구조', '상태']:
-        problems.append(f'{name}: 줄기 문서의 `##`이 `구조`·`상태` 두 절이 아님')
+    if [l[3:].strip() for l in lines if l.startswith('## ')] != SECTIONS:
+        problems.append(f'{name}: 줄기 문서의 `##`이 {SECTIONS}이 아님')
+    if not kv.get('변동폭'):
+        problems.append(f'{name}: 변동폭 줄이 없음 (못 쟀으면 `미측정`)')
     if br['state'] not in ('작업', '보존', '닫힘'):
         problems.append(f'{name}: 상태 줄을 읽지 못함 ({br["state"]})')
     if br['state'] == '작업' and len(br['진행중']) > QUOTA:
@@ -249,7 +252,7 @@ EOF
 - **기록 없는 exp·실험** — `EXP.md`가 없는 exp 폴더나, `EXP.md`에 항목이 없는 실험 폴더다. 기록 규칙이 지켜지지 않았다는 신호다. 삭제 전에 `metrics.json`을 읽어 소급 기록할 수 있는지 먼저 확인한다. 유효한 실험을 기록 누락 때문에 버리는 것이 가장 큰 손실이다. 여러 세션이 동시에 일하면 다른 세션이 실험을 돌리는 중이라 기록 전일 수 있으므로, 만든 세션이 끝났는지 확인하기 전에는 지우지 않는다. 그래서 이런 exp는 2·3절 후보에서 빠진다. 줄기를 가르다가 `BRANCH.md`를 만들지 않은 하위 줄기도 여기 exp로 잡힌다
 - **줄기 문서가 없는 곳** — exp가 줄기 밖(`exp/` 바로 아래 등)에 있다. 맞는 줄기로 옮기거나 줄기 문서를 만든다(승인 필요). 옮긴 뒤에는 옛 경로를 가리키던 config와 문서를 고친다
 - **머리·대조·진행중의 폴더가 없음** — 경로가 틀렸거나 이미 없어진 것을 가리킨다. `상태` 절을 고치거나 그 자리의 config로 다시 만든다
-- **`##`이 `구조`·`상태`가 아님, 제목과 `상태` 절의 진행중이 어긋남, 정원 초과, 상태 줄에 쌓인 서술, 비어 있는 `보관:`, 이름 규칙 밖의 폴더** — 문서를 먼저 고친다. 정원을 넘은 줄기는 2-1절의 판정 세션을 열어 진행중 exp를 줄인다
+- **`##`이 `구조`·`상태`·`다음 후보`가 아님, 변동폭 줄이 없음, 제목과 `상태` 절의 진행중이 어긋남, 정원 초과, 상태 줄에 쌓인 서술, 비어 있는 `보관:`, 이름 규칙 밖의 폴더** — 문서를 먼저 고친다. 정원을 넘은 줄기는 2-1절의 판정 세션을 열어 진행중 exp를 줄인다
 
 ### 2. 산출물 삭제
 
@@ -289,7 +292,7 @@ grep -rH "^- 보관:" exp/ --include=EXP.md
 
 `보관:` 목록도 이때 훑는다. 이유가 사라진 것(그 구성을 다시 볼 일이 없어졌거나, 비교 기준이 다른 exp로 바뀜)은 줄을 지운다.
 
-줄기도 이때 본다. 머리를 더 확장하지 않을 `작업` 줄기는 남길 이유가 있으면 `보존 — <이유>`로, 없으면 `닫힘`으로 바꾼다. `보존` 줄기의 이유가 사라졌으면 닫는다. `구조` 절이 지금의 모델 구조와 맞는지도 본다.
+줄기도 이때 본다. 머리를 더 확장하지 않을 `작업` 줄기는 남길 이유가 있으면 `보존 — <이유>`로, 없으면 `닫힘`으로 바꾼다. `보존` 줄기의 이유가 사라졌으면 닫는다. `구조` 절이 지금의 모델 구조와 맞는지, `다음 후보`에 이미 연 exp나 판정에서 버린 방향이 남아 있지 않은지도 본다.
 
 ```bash
 grep -rHn "^- 상태:" exp/ --include=BRANCH.md
@@ -327,23 +330,17 @@ find . \( -name '*final*' -o -name '*copy*' -o -name '*_v[0-9]*' -o -name '*수�
 
 ```bash
 grep -rn "^#\{2,3\} .*\(요약\|현황\|총평\|변경\|추가 분석\|업데이트\|[0-9]차\|재검토\|기타\)" \
-     EDA.md pipelines/ exp/ --include=*.md
+     EDA.md exp/ --include=*.md
 find exp -type d | grep -E '/(v[0-9]+|new|old|tmp|final|[0-9]+차)(-|/|$)|[-_]v[0-9]+(/|$)'
 ```
 
-**스키마 이탈 탐지** — `pipelines/`는 다섯 개 이름이 고정이고, 줄기 문서는 `구조`·`상태` 두 절이 고정이다(0절 스크립트가 본다). `pipelines/`·exp 문서는 `###`을 쓰지 않는다.
+**스키마 이탈 탐지** — 줄기 문서는 `구조`·`상태`·`다음 후보` 세 절이 고정이다(0절 스크립트가 본다). 줄기 문서와 exp 문서는 `###`을 쓰지 않는다.
 
 ```bash
-for f in pipelines/*.md; do
-  [ "$(basename $f)" = TEMPLATE.md ] && continue
-  echo "--- $f"
-  diff <(grep '^## ' $f) <(printf '## 목적·가설\n## 입력 표현\n## 모델\n## 현재 상태\n## 다음 후보\n')
-  grep -n '^### ' $f
-done
-grep -rHn '^### ' exp/ --include=EXP.md
+grep -rHn '^### ' exp/ --include=EXP.md --include=BRANCH.md
 ```
 
-`diff` 출력이나 `###` 검출이 있으면 위반이다. exp 문서에서 `###`이 나오면 실험 항목 안에 하위 서술이 자란 것이므로 확정된 필드로 압축하거나 별도 실험으로 분리한다.
+`###` 검출이 있으면 위반이다. exp 문서에서 `###`이 나오면 실험 항목 안에 하위 서술이 자란 것이므로 확정된 필드로 압축하거나 별도 실험으로 분리한다.
 
 **중복 범주·줄기·exp 탐지** — `EDA.md`의 헤딩 목록, 줄기 목록, exp 제목을 훑어 의미가 겹치는 것이 있는지 본다. 자동 판정이 어려우므로 눈으로 확인한다. 구성이 같은 exp가 둘이면 구성을 바꾸지 않는 실험에 exp를 연 것이다 — 다음부터 그 exp의 실험으로 둔다. 같은 조건으로 비교되는 exp가 두 줄기에 나뉘어 있으면 `갈라진 곳`의 이유를 본다.
 
@@ -353,7 +350,7 @@ grep -rHn '^### ' exp/ --include=EXP.md
 grep -n "^#\{2,3\} " EDA.md
 find exp -name BRANCH.md | sort
 grep -rH "^# " exp/ --include=EXP.md | sort
-ls pipelines/*.md docs/*.md *.md
+ls docs/*.md *.md
 ```
 
 **슬롯 분량 확인** — 특정 슬롯에만 서술이 누적됐는지 본다.
@@ -362,8 +359,7 @@ ls pipelines/*.md docs/*.md *.md
 python - <<'EOF'
 import re
 from pathlib import Path
-files = [Path('EDA.md')] + [p for p in Path('pipelines').glob('*.md') if p.name != 'TEMPLATE.md'] \
-        + sorted(Path('exp').rglob('BRANCH.md')) + sorted(Path('exp').rglob('EXP.md'))
+files = [Path('EDA.md')] + sorted(Path('exp').rglob('BRANCH.md')) + sorted(Path('exp').rglob('EXP.md'))
 for f in files:
     lines = f.read_text(encoding='utf-8').split('\n')
     idx = [i for i, l in enumerate(lines) if re.match(r'^#{2,3} ', l)]
@@ -388,4 +384,4 @@ EOF
 - 줄기의 `구조` 절이 지금의 모델 구조와 맞고, `보관:`과 `보존` 이유가 아직 유효하다
 - `보류` 목록이 방향별로 전부 제시됐다
 - 시점 기반 헤딩과 시점 기반 폴더 이름이 없다
-- `pipelines/*.md`의 `##`이 스키마 다섯 개와 일치하고, 줄기 문서의 `##`이 `구조`·`상태`이고, `pipelines/`·exp 문서에 `###`이 없다
+- 줄기 문서의 `##`이 `구조`·`상태`·`다음 후보`이고, 줄기·exp 문서에 `###`이 없다

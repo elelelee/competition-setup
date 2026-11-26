@@ -1,6 +1,6 @@
 ---
 name: competition-setup
-description: Bootstrap a new AI/ML competition project in one pass — interview and lock the competition spec, create the pipeline documents and the branch-based experiment tree (development branches hold a few exps under a per-branch quota, each exp bundles the many runs that answer one question, and branches fork when the work needs a separate line), and write the project rules file (CLAUDE.md) plus reference docs that govern the rest of the competition after this skill is done. Run this once at the start of a Kaggle, DACON, or similar leaderboard competition. This skill only does setup — it does not train models, tune hyperparameters, or debug CV-LB gaps. For modeling itself use ml-modeling or dl-modeling; for mid-competition decisions the generated CLAUDE.md and docs take over.
+description: Bootstrap a new AI/ML competition project in one pass — interview and lock the competition spec, create the branch-based experiment tree (development branches hold a few exps under a per-branch quota, each exp bundles the many runs that answer one question, and branches fork when the work needs a separate line), and write the project rules file (CLAUDE.md) plus reference docs that govern the rest of the competition after this skill is done. Run this once at the start of a Kaggle, DACON, or similar leaderboard competition. This skill only does setup — it does not train models, tune hyperparameters, or debug CV-LB gaps. For modeling itself use ml-modeling or dl-modeling; for mid-competition decisions the generated CLAUDE.md and docs take over.
 disable-model-invocation: true
 ---
 
@@ -12,7 +12,7 @@ disable-model-invocation: true
 
 ## 범위
 
-**한다**: 대회 스펙 확정, 디렉토리 생성, 파이프라인·실험 문서 체계 초기화, 이후 세션이 따를 규칙 파일과 참조 문서 작성.
+**한다**: 대회 스펙 확정, 디렉토리 생성, 줄기·실험 문서 체계 초기화, 이후 세션이 따를 규칙 파일과 참조 문서 작성.
 
 **하지 않는다**: 모델 학습, fold 생성, 피처 엔지니어링, 하이퍼파라미터 튜닝, CV-LB 갭 진단.
 
@@ -53,11 +53,11 @@ disable-model-invocation: true
 ## 2단계 — 디렉토리 생성
 
 ```bash
-mkdir -p data/raw data/processed src exp sub docs pipelines
+mkdir -p data/raw data/processed src exp sub docs
 printf 'data/raw/\ndata/processed/\nexp/**/ckpt/\nexp/**/*.npy\nexp/**/*.npz\nexp/**/*.log\nsub/\n__pycache__/\n*.pyc\n' > .gitignore
 ```
 
-실험 폴더는 줄기 아래로 중첩되므로(`exp/<줄기>/<exp>/<실험>/`) 패턴은 `exp/**/`로 쓴다. `.gitignore`에서 대용량 산출물을 제외하되 `EDA.md`, `exp/**/BRANCH.md`, `exp/TEMPLATE.md`, `pipelines/*.md`는 반드시 버전 관리에 포함시킨다. 이 문서들이 기록의 단일 원천이므로 유실되면 복구할 수 없다.
+실험 폴더는 줄기 아래로 중첩되므로(`exp/<줄기>/<exp>/<실험>/`) 패턴은 `exp/**/`로 쓴다. `.gitignore`에서 대용량 산출물을 제외하되 `EDA.md`, `exp/**/BRANCH.md`, `exp/**/EXP.md`, `exp/TEMPLATE.md`는 반드시 버전 관리에 포함시킨다. 이 문서들이 기록의 단일 원천이므로 유실되면 복구할 수 없다.
 
 기존 파일이 있는 프로젝트라면 덮어쓰지 말고 현재 구조를 먼저 보여준 뒤 무엇을 이동·생성할지 확인받는다.
 
@@ -139,33 +139,24 @@ def new_run_dir(ref: str) -> Path:
 
 ---
 
-## 4단계 — 파이프라인 문서와 줄기 생성
+## 4단계 — 줄기 생성
 
-### 파이프라인
+### 최상위 줄기 후보
 
-1단계에서 확인한 과제 유형과 데이터 구조에 근거해 파이프라인 후보 **2~3개**를 제안하고 사용자가 고르게 한다. 임의로 정하지 않는다.
+1단계에서 확인한 과제 유형과 데이터 구조에 근거해 최상위 줄기(대략적인 모델 구조) 후보 **2~3개**를 제안하고 사용자가 고르게 한다. 임의로 정하지 않는다.
 
-후보는 서로 **입력 표현이나 모델 계열이 다른 것**으로 구성한다. 하이퍼파라미터나 피처 몇 개 차이는 별도 파이프라인이 아니라 같은 파이프라인의 개선이다. 이 구분을 세팅 시점에 잘못 잡으면 이후 파이프라인 문서가 불필요하게 늘어난다.
+후보는 서로 **입력 표현이나 모델 구조가 다른 것**으로 구성한다. 하이퍼파라미터나 피처 몇 개 차이는 별도 줄기가 아니라 같은 줄기의 exp다. 이 구분을 세팅 시점에 잘못 잡으면 이후 줄기가 불필요하게 늘어난다.
 
 과제 유형별 예시:
 
-- 테이블: GBDT 계열 / 선형·정규화 모델 / 신경망(임베딩 기반)
+- 테이블: 단일 GBDT / 선형·정규화 모델 / 신경망(임베딩 기반). 멤버가 모이면 이들을 결합하는 스택 줄기가 따로 생긴다
 - 이미지: 사전학습 CNN 파인튜닝 / ViT 계열 / 도메인 특화 전처리 + 경량 모델
 - 텍스트: 사전학습 트랜스포머 파인튜닝 / 임베딩 + GBDT / 규칙·통계 피처 기반
 - 시계열: 통계 모델 / lag 피처 + GBDT / 시퀀스 모델
 
-선택된 각 후보에 대해 템플릿을 복사해 `pipelines/NN-<이름>.md`를 만들고 `목적·가설` 절을 1단계 정보로 채운다. 나머지 절은 첫 실험 세션에서 채워지므로 비워 둔다.
-
-```bash
-cp <skill_dir>/assets/pipeline.template.md pipelines/TEMPLATE.md
-cp <skill_dir>/assets/pipeline.template.md pipelines/01-<이름>.md
-```
-
-`pipelines/`의 `##` 다섯 개는 스키마이므로 데이터 유형과 무관하게 그대로 유지한다. `EDA.md`와 달리 조정 대상이 아니다.
-
 ### 줄기 · exp · 실험
 
-실험 기록과 산출물은 파이프라인 아래에서 모델 구조를 따라 나뉜다. 규칙 전체는 `CLAUDE.md` `줄기 · exp · 실험`과 `정원과 보관` 절에 있다. 아래 설명은 예시이고, 무엇을 줄기·exp·실험으로 나눌지는 사용자가 명시하면 그대로, 아니면 대회 중에 판단한다.
+실험 기록과 산출물은 모델 구조를 따라 나뉜다. 규칙 전체는 `CLAUDE.md` `줄기 · exp · 실험`과 `정원과 보관` 절에 있다. 아래 설명은 예시이고, 무엇을 줄기·exp·실험으로 나눌지는 사용자가 명시하면 그대로, 아니면 대회 중에 판단한다.
 
 | 단위 | 위치 | 무엇인가 (예) |
 |---|---|---|
@@ -177,14 +168,14 @@ cp <skill_dir>/assets/pipeline.template.md pipelines/01-<이름>.md
 
 기록을 실험 축(무엇을 바꿨는지)으로 나누지 않는 이유도 있다. 그렇게 하면 대회 후반에 결합·스태킹 실험이 한 축 파일에 몰려, 파일을 열어도 지금 살아 있는 것이 보이지 않는다. 축은 실험 항목의 `축` 필드로 남겨 검색에 쓴다(아래 `축 목록`).
 
-선택된 파이프라인마다 **최상위 줄기 하나**를 만든다. 이름은 그 줄기의 모델 구조를 가리킨다(`stack`, `gbdt-single`, `cnn-finetune`). 시점이나 순번(`v1`, `base`, `new`)을 이름에 쓰지 않는다. 이름을 제안하고 사용자가 확정하게 한다.
+고른 후보마다 **최상위 줄기 하나**를 만든다. 이름은 그 줄기의 모델 구조를 가리킨다(`stack`, `gbdt-single`, `cnn-finetune`). 시점이나 순번(`v1`, `base`, `new`)을 이름에 쓰지 않는다. 이름을 제안하고 사용자가 확정하게 한다.
 
 ```bash
 cp <skill_dir>/assets/experiment-log.template.md exp/TEMPLATE.md
 mkdir -p exp/<줄기>
 ```
 
-`TEMPLATE.md`는 형식 참조용이므로 5단계에서 이 대회에 맞게 확정한 뒤 그대로 둔다. 각 줄기 문서는 **템플릿을 복사하지 않고 새로 쓴다.** `구조` 절에는 1단계에서 확인한 과제와 사용자와 고른 파이프라인으로 그 줄기의 모델 구조를 적는다. 다음 세션이 이 절만 읽고도 무엇을 어떤 순서로 결합하는 모델인지 알 수 있어야 한다.
+`TEMPLATE.md`는 형식 참조용이므로 5단계에서 이 대회에 맞게 확정한 뒤 그대로 둔다. 각 줄기 문서는 **템플릿을 복사하지 않고 새로 쓴다.** `구조` 절에는 1단계에서 확인한 과제와 사용자와 고른 후보로 그 줄기의 모델 구조와 왜 이 구조로 가는지를 적는다. 다음 세션이 이 절만 읽고도 무엇을 어떤 순서로 결합하는 모델인지 알 수 있어야 한다. `다음 후보`에는 세팅 대화에서 나온 첫 시도들을 적는다.
 
 ```markdown
 # gbdt-single
@@ -193,16 +184,20 @@ GBDT 한 모델로 예측하는 구조. 규칙은 `CLAUDE.md`, 형식은 `exp/TE
 
 ## 구조
 
-원본 피처(필요하면 파생 피처)를 GBDT 하나에 넣어 확률을 낸다. 결합 단계는 없다. fold별 모델의 OOF로 검증하고, test는 전체 train으로 다시 학습한 모델로 예측한다.
+원본 피처(필요하면 파생 피처)를 GBDT 하나에 넣어 확률을 낸다. 결합 단계는 없다. fold별 모델의 OOF로 검증하고, test는 전체 train으로 다시 학습한 모델로 예측한다. 테이블 이진분류에서 가장 먼저 세우는 기준 구조로, 첫 (검증 점수, LB) 쌍과 변동폭을 여기서 얻는다.
 
 ## 상태
 
-- 파이프라인: `01-gbdt`
 - 갈라진 곳: 없음
 - 상태: 작업
 - 머리: 없음
 - 대조: 없음
 - 진행중: 없음
+- 변동폭: 미측정
+
+## 다음 후보
+
+- [ ] 원본 피처 LightGBM 기준선 (수 분 / 첫 제출과 변동폭 측정)
 ```
 
 규칙을 줄기 문서마다 재서술하지 않는다. 줄기가 늘어날 때마다 같은 설명이 깔리고, `CLAUDE.md`가 바뀌었을 때 전부 낡는다.
@@ -234,7 +229,7 @@ GBDT 한 모델로 예측하는 구조. 규칙은 `CLAUDE.md`, 형식은 `exp/TE
 | 변동폭 정의 | 무엇의 표준편차인가 | 5-fold 평균의 시드 간 표준편차 / 동일 설정 3-run의 표준편차 |
 | 판단 재료 | `결과` 필드에서 세 신호가 읽히는가 | fold별·run별 개별 점수를 남기는 형식인지 |
 | exp 구성 줄 | `exp/TEMPLATE.md` exp 머리말의 구성 줄(`모델`·`피처`·`결합`) 이름과 적을 것. 과제 유형에 맞게 바꾼다 | 테이블 스택: 1단계 멤버 / 피처 그룹 / 메타 · 이미지: 백본 / 해상도·증강 / TTA·앙상블 |
-| 실험 필드 | `exp/TEMPLATE.md`의 실험 항목 필드와 각 필드에 적을 것. 파이프라인은 줄기 머리말이, 구성·대조·조건은 exp 머리말이 가지므로 실험 항목에는 축·바꾼 것·결과·가설·해석만 둔다 | `결과: CV ± std · fold별 [...]` / `결과: val mAP@0.5 ± std · run별 [...] · best epoch` |
+| 실험 필드 | `exp/TEMPLATE.md`의 실험 항목 필드와 각 필드에 적을 것. 모델 구조는 줄기 문서가, 구성·대조·조건은 exp 머리말이 가지므로 실험 항목에는 축·바꾼 것·결과·가설·해석만 둔다 | `결과: CV ± std · fold별 [...]` / `결과: val mAP@0.5 ± std · run별 [...] · best epoch` |
 | 축 목록 | `exp/TEMPLATE.md`의 `축 목록` — 실험 항목 `축` 필드에 쓸 값 | `feature`, `encoding`, `ensemble` / `augmentation`, `backbone` |
 | 산출물 파일명 | 실험 폴더 `exp/<줄기>/<exp>/<실험>/` 안의 파일. 정리 정책의 `DROP` 확장자와 맞춘다 | `oof.npy`, `pred.npy` / `val_pred.npz`, `test_pred.npz` |
 
@@ -287,14 +282,13 @@ cp <skill_dir>/assets/cleanup-policy.md     docs/
 | `{{DEADLINE}}` | 최종 제출 마감 |
 | `{{EXTERNAL_DATA}}` | 외부 데이터·사전학습 허용 여부 |
 | `{{OPEN_ITEMS}}` | 1단계에서 확인하지 못한 항목 목록 |
-| `{{PIPELINE_1}}` | 4단계에서 만든 파이프라인 파일명 |
 | `{{SPLIT_ARTIFACT}}` | 5단계에서 확정한 분할 산출물 파일명 |
 | `{{VARIATION}}` | 5단계에서 확정한 변동폭 정의 |
 | `{{ARTIFACT_FILES}}` | 5단계에서 확정한 산출물 파일명 목록 |
 
 치환하지 못한 자리표시자가 남아 있으면 안 된다. 값이 없으면 `미확인`으로 채운다.
 
-파이프라인을 2개 이상 만들었으면 `CLAUDE.md` 하단 mermaid 다이어그램의 `PIPE` 노드에 나머지도 추가한다. 줄기는 대회 도중 자주 열고 닫으므로 다이어그램에 개별 줄기를 넣지 않는다(`EXP` 아래는 `<줄기>/` 일반형 그대로 둔다). 다이어그램은 Mermaid 문법으로 직접 작성하며, 외부 도구나 커넥터를 호출하지 않는다.
+줄기는 대회 도중 자주 열고 닫으므로 `CLAUDE.md` 하단 mermaid 다이어그램에 개별 줄기를 넣지 않는다(`EXP` 아래는 `<줄기>/` 일반형 그대로 둔다). 다이어그램은 Mermaid 문법으로 직접 작성하며, 외부 도구나 커넥터를 호출하지 않는다.
 
 `CLAUDE.md`는 Claude Code가 이후 세션마다 자동으로 읽는 파일이므로 이 스킬의 규칙을 지속시키는 유일한 경로다. 길게 만들지 않는다. 규칙과 포인터만 두고 상세는 `docs/`에 맡긴다.
 
@@ -317,4 +311,4 @@ cp <skill_dir>/assets/cleanup-policy.md     docs/
 
 ## 참고
 
-`assets/`의 문서들은 이 스킬이 읽을 참조가 아니라 **프로젝트로 복사될 산출물**이다. 다만 5단계에서 형식을 구체화해야 하므로 `experiment-log.template.md`와 `pipeline.template.md`는 읽는다. `docs/`로 가는 참조 문서 세 개는 그대로 복사한다. 사용자가 내용을 물으면 그때 해당 파일을 읽고 답한다.
+`assets/`의 문서들은 이 스킬이 읽을 참조가 아니라 **프로젝트로 복사될 산출물**이다. 다만 5단계에서 형식을 구체화해야 하므로 `experiment-log.template.md`는 읽는다. `docs/`로 가는 참조 문서 세 개는 그대로 복사한다. 사용자가 내용을 물으면 그때 해당 파일을 읽고 답한다.
